@@ -1,0 +1,675 @@
+---
+title: "Visualizing Colchester's Crime Trends and Weather Pattern of 2023"
+output:
+  html_document: {}
+  pdf_document: default
+---
+
+<style>
+/* Embedded CSS styles */
+body {
+    font-size: 16px; /* Adjust the font size for the entire document */
+    font-family: 'Arial', sans-serif; /* Custom font family for all headings */
+}
+
+h1 {
+    font-size: 29px; /* Font size for first-level headers */
+    color: #8B4513; /* Dark brown color for all headings */
+    font-family: 'Arial', sans-serif; /* Custom font family for all headings */
+    text-align: center; /* Align first-level headers to center */
+}
+
+h2 {
+    font-size: 22px; /* Font size for second-level headers */
+    color: #8B4513; /* Dark brown color for all headings */
+    font-family: 'Arial', sans-serif; /* Custom font family for all headings */
+    text-align: center; /* Align second-level headers to center */
+}
+
+h3 {
+    font-size: 20px; /* Font size for third-level headers */
+    color: #8B4513; /* Dark brown color for all headings */
+    font-family: 'Arial', sans-serif; /* Custom font family for all headings */
+    text-align: center; /* Align third-level headers to center */
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE,warning=FALSE}
+listofpackages <- c("lubridate","tidyverse","tidytext","ggplot2","dplyr","geosphere","plotly","prophet","gstat","reshape2","stats","maps","ggforce","viridis","leaflet","RColorBrewer","crosstalk","gridExtra","cowplot","ggmap","leaflet.extras","DT","ggridges")
+
+for (j in listofpackages){
+  if(sum(installed.packages()[, 1] == j) == 0) { install.packages(j) }
+  library(j, character.only = T)
+}
+```
+
+```{r include=FALSE}
+#loading the dataset from csv file
+crime_data<-read.csv("/Users/shraddha/Desktop/MA304 assignment/crime23.csv")
+temp_data<-read.csv("/Users/shraddha/Desktop/MA304 assignment/temp2023.csv")
+```
+# **Introduction**
+
+In this report we take a close look at crime in Colchester, a town rich in history and home to 192,400 people. We will investigate the Colchester's crime landscape and the temperature data collected in 2023. 
+
+  Colchester's historical significance as Britain's oldest recorded town and former capital of the United Kingdom adds depth to our analysis. With such historical richness and a sizable population, our primary objective is to uncover any correlations or patterns between weather phenomena and crime rates. By shining a light on the dynamic relationship between environmental factors and public safety dynamics, we aim to provide insights into how these variables influence one another within an area spanning approximately 31.52 square km.
+
+  Our overarching goal is to assess the safety of Colchester as a whole. This analysis can help assist law enforcement agencies, policymakers, and the community in collaborative efforts to prevent crime, optimize resource allocation, and strategize for the future.
+
+  So, let's dive in and navigate through the data-driven landscape of crime and temperature in Colchester. With each click and scroll, we'll unravel the mysteries, challenge assumptions, and pave the way for a safer and more resilient community.
+
+```{r include=FALSE}
+library(tidytext)
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(plotly)
+library(RColorBrewer)
+
+
+```
+
+```{r include=FALSE}
+# converting temperature daily data into monthly data 
+temp_merge_data <- temp_data %>%
+  mutate(monthly_date = floor_date(as.Date(Date, "%Y-%m-%d"), unit = "month")) %>%
+  group_by(monthly_date) %>%
+  summarise(TemperatureCAvg = mean(TemperatureCAvg,na.rm = TRUE),
+            TemperatureCMax = max(TemperatureCMax, na.rm = TRUE),
+            TemperatureCMin = min(TemperatureCMin, na.rm = TRUE),
+            TdAvgC = mean(TdAvgC, na.rm = TRUE),
+            HrAvg = mean(HrAvg, na.rm = TRUE),
+            WindkmhInt = mean(WindkmhInt, na.rm = TRUE),
+            WindkmhGust = mean(WindkmhGust, na.rm = TRUE),
+            PresslevHp = max(PresslevHp, na.rm = TRUE),
+            Precmm = mean(Precmm, na.rm = TRUE),
+            TotClOct = mean(TotClOct, na.rm = TRUE),
+            lowClOct = max(lowClOct, na.rm = TRUE),
+            SunD1h = mean(SunD1h, na.rm = TRUE),
+            VisKm=mean(VisKm, na.rm = TRUE))
+
+# Categorize temperature
+temp_category<- ifelse(temp_merge_data$TemperatureCAvg >= 15, "Hot", ifelse(temp_merge_data$TemperatureCAvg < 6, "Cold", "Moderate"))
+
+# Categorize sunshine duration
+sun_category <- ifelse(temp_merge_data$SunD1h > 6, "Sunny", "Not Sunny")
+
+# Categorize wind speed
+wind_category <- ifelse(temp_merge_data$WindkmhInt > 20, "Windy", "Not Windy")
+
+#Adding those columns back to existing dataframe.
+temp_merge_data$temp_category<- temp_category
+temp_merge_data$sun_category<- sun_category
+temp_merge_data$wind_category<- wind_category
+
+# Extract month and season
+temp_merge_data <- temp_merge_data %>%
+  mutate(
+    month = month(monthly_date),
+    season = case_when(
+      month(monthly_date) %in% c(12, 1, 2) ~ "Winter",
+      month(monthly_date) %in% c(3, 4, 5) ~ "Spring",
+      month(monthly_date) %in% c(6, 7, 8) ~ "Summer",
+      month(monthly_date) %in% c(9, 10, 11) ~ "Fall"
+    )
+  )
+
+# Trend analysis (example using LOESS smoothing)
+temp_merge_data <- temp_merge_data %>%
+  mutate(
+    TempCAvg_trend = predict(loess(TemperatureCAvg ~ as.numeric(monthly_date))),
+    TempCMax_trend = predict(loess(TemperatureCMax ~ as.numeric(monthly_date))),
+    TempCMin_trend = predict(loess(TemperatureCMin ~ as.numeric(monthly_date)))
+  )
+
+```
+
+```{r include=FALSE}
+#Merging the crime and the temperature data together for further analysis
+
+crime_data<-crime_data%>%
+  mutate(monthly=as.Date(paste(date, "01",sep="-"), format = "%Y-%m-%d"))%>%
+  mutate(month_name=month(monthly,label=TRUE))
+
+# Categorical Aggregation (example: grouping similar incident types)
+crime_data <- crime_data %>%
+  mutate(incident_category = case_when(
+    category %in% c("bicycle-theft","shoplifting","theft-from-the-person","vehicle-crime","other-theft") ~ "Theft",
+    category %in% c("robbery", "burglary") ~ "Property Crime",
+    category %in% c("criminal-damage-arson", "possession-of-weapons","violent-crime") ~ "Violent Crime",
+    category %in% c("drugs") ~ "Drug-Related Crime",
+    category %in% c("public-order", "anti-social-behaviour") ~ "Public Order Crime",
+    category %in% c("other-crime") ~ "Other Crime",
+    TRUE ~ "Other"
+  ))
+
+final_data <- crime_data %>%
+  left_join(temp_merge_data, by = c("monthly" = "monthly_date"))
+```
+
+```{r fig.width=9,out.height="60%",fig.align='center',warning=FALSE}
+plot_ly() %>%
+  add_histogram(data = crime_data, y = ~fct_rev(fct_infreq(factor(category))), marker = list(color = 'light blue')) %>%
+  layout(title = "Distribution of Crime Incidents by Category",
+         xaxis = list(title = "Number of Incidents"),
+         yaxis = list(title = ""),
+         showlegend = FALSE,
+         titlefont = list(size = 16),
+         xaxis_title = list(size = 14,showgrid=FALSE),
+         yaxis_title = list(size = 14,showgrid=FALSE),
+         plot_bgcolor = "rgba(0,0,0,0)",
+         paper_bgcolor = "rgba(0,0,0,0)",
+         font = list(color = "black")
+         )
+```
+Imagine peering into the world of crime incidents, where each category tells its own story through the heights of colorful bars. The histogram acts as our guide, painting a vivid picture of which types of crime pop up most frequently in our dataset. Tall bars grab our attention, signaling where trouble tends to brew more often.
+
+With a quick glance at the histogram, we can spot the violent crime category stand out from the crowd. By hovering over each bar, we can see the count of that particular crime, which helps us understand the frequency of the crime. Going forward, we will be exploring the crime trends to gain more interesting insights about the crimes.
+
+```{r fig.width=9,out.height="60%",fig.align='center', warning=FALSE}
+# Calculating the count of incidents per month
+monthly_crime_counts <- final_data %>%
+  group_by(month) %>%
+  summarise(count = n())
+
+# Plotting crime trends over time
+crime_trend_plot <- ggplot(monthly_crime_counts, aes(x = month, y = count,color = count)) +
+  geom_line(size = 1) +
+  labs(title = "Crime Trends Over Time",
+       x = "Month",
+       y = "Number of Incidents") +
+  scale_x_continuous(breaks = 1:12, labels = month.abb) + 
+  scale_color_gradient(low = "blue", high = "red") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),axis.line = element_line(color = "black"))
+
+# Print the plot
+print(crime_trend_plot)
+```
+
+Let's delve into the trends of various crimes in the Colchester region through a vibrant graph displaying crime incidents over the course of a year. In this visualization, red denotes a higher number of incidents, while blue signifies fewer occurrences.
+
+Upon analysis, it's evident that January consistently reports the highest number of crime incidents annually, with September following closely as the second-highest month. Notably, February exhibits a significant decline in incidents, prompting speculation on the activities of criminals during this period. Additionally, May and July stand out with elevated reports of criminal incidents. Towards the year's end, particularly in December, there is a noticeable decrease in such occurrences.
+
+Considering these trends, the question arises: Is Colchester truly safe?
+
+In conclusion, the data suggests that crime incidents tend to peak during the winter months compared to other seasons, emphasizing a seasonal pattern worth further exploration.
+
+```{r fig.align='center',fig.height=7,fig.width=11}
+library(viridis)
+
+# Categorical Aggregation (example: grouping similar incident types)
+crime_data <- crime_data %>%
+  mutate(incident_category = case_when(
+    category %in% c("bicycle-theft","shoplifting","theft-from-the-person","vehicle-crime","other-theft") ~ "Theft",
+    category %in% c("robbery", "burglary") ~ "Property Crime",
+    category %in% c("criminal-damage-arson", "possession-of-weapons","violent-crime") ~ "Violent Crime",
+    category %in% c("drugs") ~ "Drug-Related Crime",
+    category %in% c("public-order", "anti-social-behaviour") ~ "Public Order Crime",
+    category %in% c("other-crime") ~ "Other Crime",
+    TRUE ~ "Other"
+  ))
+
+# Calculate count values based on the number of rows for each category-month combination
+crime_data_boxplot <- crime_data %>%
+  group_by(incident_category, month_name) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  ungroup()
+
+# Creating the boxplot
+boxplot <- ggplot(crime_data_boxplot, aes(x = "", y = count, fill = incident_category)) +
+  geom_boxplot() +
+  facet_wrap(~ incident_category, scales = "free") + 
+  scale_fill_viridis(discrete = TRUE) + 
+  theme_minimal() + 
+  labs(title = "Boxplot of Crime Counts by Category", x = NULL, y = "Count", fill = "Category") +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),axis.line = element_line(color = "black"),legend.position = "none")
+
+# Print the boxplot
+print(boxplot)
+
+```
+
+For further analysis, the data has been categorized into six distinct crime categories, grouping similar types of crimes together, such as bicycle theft, shoplifting, theft from the person, vehicle crime, and other theft, under the umbrella category of Theft. This categorization allows for a more focused analysis of the data and the underlying patterns of criminal activity. Each boxplot tells a unique story, revealing the distribution of crime counts across different categories with vivid clarity.
+
+Utilizing a boxplot, the visualization illustrates the distribution of crime counts across these six categories over the course of the year. From the plot we can observe:
+
+- Essential statistical metrics such as median, quartiles, and potential outliers are visually conveyed, aiding in our understanding of the data's spread.
+
+- We can visually compare central tendencies, like median crime counts, across different categories. Notably, Property Crime emerges with the highest median count, succeeded by Violent Crime, Public Order Crime, Other Crime, and Drug-Related Crime.
+
+- The height of each box indicates the spread or variability in crime counts. Narrower boxes for Drug-Related Crime, Other Crime, and Property Crime imply lower variability, while taller boxes for Violent Crime and Public Order Crime suggest higher variability.
+
+- Dots positioned outside the whiskers signify potential outliers or extreme values. While Drug-Related Crime, Other Crime, and Property Crime exhibit no outliers, isolated outliers are apparent in Theft and Violent Crime categories."
+
+
+```{r fig.align='center',fig.height=7,fig.width=11}
+
+# Calculate counts for each category and month
+category_month_counts <- crime_data %>%
+  group_by(incident_category, month_name) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  arrange(incident_category, match(month_name, month.abb))
+
+# Interactive dot plot
+dot_plot <- category_month_counts %>%
+  plot_ly(x = ~month_name, y = ~count, color = ~incident_category, type = "scatter", mode = "markers",
+          marker = list(size = 12, opacity = 0.9, colorscale = "magma"),
+          colors = "Dark2") %>%
+  layout(title = "Distribution of Crime Categories by Month",
+         xaxis = list(title = "Month", showgrid=FALSE),
+         yaxis = list(title = "Count", showgrid=FALSE),
+         showlegend = TRUE,
+         hovermode = "closest",
+         margin = list(l = 40, r = 40, t = 80, b = 40))
+
+# Print the interactive dot plot
+dot_plot
+```
+
+A dot plot visualizes the frequency of various categories of criminal incidents occurring throughout the year. In this representation, each dot corresponds to the count of incidents in a given month.
+
+Observations reveal that drug-related crimes remain relatively low, occurring fewer than 50 times in a month, consistent across the year. Similarly, property-related crimes and some other unclassified crimes demonstrate low frequencies.
+
+Notably, Colchester exhibits a concerning trend in violent crimes, with incidents exceeding 300 per month throughout most of the year, excluding February. This observation aligns with the line graph's depiction above, where violent crime peaks are evident. The yellow dots, positioned prominently at the upper end of the plot, signify these occurrences.
+
+Theft crimes rank as the second most prevalent in Colchester, highlighted by light green dots clustered in the middle section of the plot. January stands out with a notable spike, recording over 200 incidents, correlating with the line graph's insights.
+
+Additionally, public order crimes, depicted by pink dots, constitute the third most frequent category. September registers the highest occurrences, as indicated by the line graph and reinforced by the dot plot.
+
+These findings uncover consistent patterns in January, February, and September across both visualizations. Further exploration across different dimensions could validate these initial observations and hypotheses.
+
+So far we have only been considering the crime categories with the monthly data, but I wonder what if we cluster the months as well and analyse the data according to the seasons. So let's dive into seasonal analysis of the crime incidents.
+
+As we are going to analyse the weather impacts on crime, we need to merge crime and temperature data together to get more insights. 
+
+## **Does weather really impact crime rate in Colchester?**
+```{r fig.align='center',fig.height=7,fig.width=10}
+
+# Converting temperature daily data into monthly data 
+temp_merge_data <- temp_data %>%
+  mutate(monthly_date = floor_date(as.Date(Date, "%Y-%m-%d"), unit = "month")) %>%
+  group_by(monthly_date) %>%
+  summarise(TemperatureCAvg = mean(TemperatureCAvg,na.rm = TRUE),
+            TemperatureCMax = max(TemperatureCMax, na.rm = TRUE),
+            TemperatureCMin = min(TemperatureCMin, na.rm = TRUE),
+            TdAvgC = mean(TdAvgC, na.rm = TRUE),
+            HrAvg = mean(HrAvg, na.rm = TRUE),
+            WindkmhInt = mean(WindkmhInt, na.rm = TRUE),
+            WindkmhGust = mean(WindkmhGust, na.rm = TRUE),
+            PresslevHp = max(PresslevHp, na.rm = TRUE),
+            Precmm = mean(Precmm, na.rm = TRUE),
+            TotClOct = mean(TotClOct, na.rm = TRUE),
+            lowClOct = max(lowClOct, na.rm = TRUE),
+            SunD1h = mean(SunD1h, na.rm = TRUE),
+            VisKm=mean(VisKm, na.rm = TRUE))
+
+# Add month and season
+temp_merge_data <- temp_merge_data %>%
+  mutate(
+    month = month(monthly_date),
+    season = case_when(
+      month(monthly_date) %in% c(12, 1, 2) ~ "Winter",
+      month(monthly_date) %in% c(3, 4, 5) ~ "Spring",
+      month(monthly_date) %in% c(6, 7, 8) ~ "Summer",
+      month(monthly_date) %in% c(9, 10, 11) ~ "Fall"
+    )
+  )
+
+# Create a bar plot for weather impact on crime types
+weather_crime_plot <- ggplot(final_data, aes(x = season, fill = incident_category)) +
+  geom_bar(position = "dodge") +
+  facet_wrap(~ incident_category, scales = "free") +
+  labs(title = "Weather Impact on Crime Types",
+       x = "Season Category",
+       y = "Number of Incidents",
+       fill = "Crime Type") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),axis.line = element_line(color = "black"))+
+  theme(legend.position = "bottom")+
+  scale_fill_brewer(palette = "Dark2") 
+
+# Display the plot
+print(weather_crime_plot)
+```
+
+
+By analyzing the heights of the bars across different seasons, we gain valuable insights into the temporal dynamics of crime occurrence.
+
+- Drug-Related Crime: **Fall** and **Spring** emerge as peak seasons for drug-related incidents, with noticeably higher occurrences compared to the relatively quieter Summer and Winter months. This observation suggests a potential link between seasonal changes and drug-related activities.
+
+- Other Crime: **Spring** and **Summer** shine as seasons with elevated crime rates, hinting at a seasonal uptick in other criminal offenses. The warmer weather and longer days may contribute to increased opportunities for criminal behavior during these months.
+
+- Property Crime: The consistent bar heights across seasons hint at a stable prevalence of property-related offenses throughout the year. This suggests that factors other than seasonal variations may play a more significant role in driving property crime rates.
+
+- Public Order Crime: **Fall** takes the spotlight as the season with the highest incidents of public order offenses, followed by a gradual decline in subsequent seasons. This trend underscores the potential influence of seasonal factors on public order dynamics.
+
+- Theft: The uniformity of bar heights across seasons indicates a lack of distinct seasonal patterns in theft-related crimes. This observation suggests that theft occurrences may be less affected by seasonal fluctuations compared to other crime types.
+
+- Violent Crime: Surprisingly, no discernible seasonal variation is observed in the bar heights for violent crime incidents. This finding suggests that factors other than seasonal changes may drive the prevalence of violent offenses.
+
+
+
+```{r fig.align='center',fig.height=7,fig.width=10}
+# Define color palette
+colors <- c("#1f77b4", "#ff7f0e")
+
+
+# Create an interactive scatter plot
+scatter_plot5 <- plot_ly(data = temp_data, x = ~TemperatureCAvg) %>%
+  add_trace(y = ~HrAvg, type = "scatter", mode = "markers", name = "Humidity") %>%
+  add_trace(y = ~TdAvgC, type = "scatter", mode = "markers", name = "Dew point temperature") %>%
+  layout(title = "Interactive Scatter Plot",
+         xaxis = list(title = "TemperatureCAvg",showgrid=FALSE),
+         yaxis = list(title = "Values",showgrid=FALSE),
+         showlegend = TRUE)
+
+# Show plot
+scatter_plot5
+```
+The scatterplot illustrates the relationship between temperature, humidity, and dew point temperature. Analyzing the data reveals an intriguing trend: humidity tends to decrease slightly as temperature rises. But it's not always consistent, which suggests that there might be other things affecting humidity too. 
+  
+  It is evident that there is no clear linear trend between temperature and humidity, whereas there is a more noticeable pattern between temperature and dew point temperature. As the average air temperature increases, the dew point temperature also tends to increase. This relationship suggests that warmer temperatures are associated with higher levels of atmospheric moisture.
+  
+  Both the scatter plots exhibit a considerable amount of variations, with points spread across a wide range of values for each variable. This variations indicates that temperature, humidity, and dew point temperature can fluctuate significantly over time, likely due to various factors such as weather systems, air masses, and geographical location. Each point on the scatter plot has its own story to tell and showing us how the weather patterns can change over time. Whether it was a gentle breeze or a fierce storm, every point reminded us of how the weather is always changing—a truly amazing sight that made us appreciate the beauty of nature even more.
+
+```{r fig.align='center',fig.height=7,fig.width=10,warning=FALSE}
+library(crosstalk)
+
+# Convert Date column to Date format
+temp_data$Date <- as.Date(temp_data$Date)
+
+# Extract month from Date column
+temp_data$Month <- format(temp_data$Date, "%m")
+
+# Drop down for month:
+month_dd<-SharedData$new(temp_data,key = ~Month)
+
+
+
+# Create density plot
+density_plot <- ggplot(month_dd, aes(x = TemperatureCAvg, fill = Month)) +
+  geom_density(alpha = 0.7, kernel = "gaussian") +
+  scale_fill_viridis_d(option = "C") +
+  labs(title = "Density Plot of TemperatureCAvg for Each Month",
+       x = "TemperatureCAvg (°C)",
+       y = "Density",
+       fill = "Month") +
+  theme_minimal()+
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),axis.line = element_line(color = "black"))
+
+```
+```{r echo=FALSE,fig.align='center',fig.height=7,fig.width=10,warning=FALSE}
+bscols(
+  filter_select(
+    id="Month",
+    label = "Select the Month from below dropdown",
+    sharedData = month_dd,
+    group = ~Month,
+    multiple = FALSE
+  )
+)
+
+#print the plot
+ggplotly(density_plot)
+```
+
+In exploring the weather data, we observed the relationship between the average temperature with respect to humidity and dew points temperature. Let's now explore the density of the average recorded temperature.
+
+Each curve on the density plot represents a month, with its own unique tale to tell. Like the ocean's tides, the density of temperature values fluctuates from the bitter cold of January to the warm, breezy days of July. The storyline reveals the intricate relationship between time and temperature with each month that goes by, providing insights into the natural cycles.
+
+The plot shows the density of average temperature for 12 months, spread from -5 to 20 degrees Celsius. However, as the graph is crowded, it will not be possible to see the detailed density plot for a particular month. To view the density plot for a particular month, we can select the month value from the drop-down provided above the plot.
+
+From the visualization, we observe that the density of TemperatureCAvg varies across months, indicating seasonal trends. For instance, during warmer months, the density tends to be higher towards the higher end of the temperature scale, reflecting warmer temperatures. Conversely, in colder months, the density shifts towards the lower end, indicating cooler temperatures.
+
+But amidst the familiar patterns, there lie hidden surprises. We can identify outliers or anomalies in the data distribution. Outliers appearing as peaks or valleys in the density plot may indicate unusual weather patterns or measurement errors.
+
+With each click and scroll, we'll unravel the secrets of seasonal shifts and unearth the beauty of nature's ever-changing canvas.
+
+
+```{r fig.align='center',fig.height=7,fig.width=10,warning=FALSE}
+library(viridis)
+
+# Create violin plot for maximum temperature
+violin_plot_max <- ggplot(temp_data, aes(x = "", y = TemperatureCMax, fill = Month)) +
+  geom_violin(trim = FALSE) +
+  scale_fill_viridis_d(option = "C") +
+  labs(title = "Violin Plot of TemperatureCMax by Month",
+       x = NULL,
+       y = "TemperatureCMax (°C)",
+       fill = "Month") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),axis.line = element_line(color = "black"),legend.position = "right")
+
+
+# Create violin plot for minimum temperature
+violin_plot_min <- ggplot(temp_data, aes(x = "", y = TemperatureCMin, fill = Month)) +
+  geom_violin(trim = FALSE) +
+  scale_fill_viridis_d(option = "C") +
+  labs(title = "Violin Plot of TemperatureCMin by Month",
+       x = NULL,
+       y = "TemperatureCMin (°C)",
+       fill = "Month_name") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),axis.line = element_line(color = "black"),legend.position = "none")
+
+```
+
+
+```{r echo=FALSE,fig.align='center',fig.height=4,fig.width=10,warning=FALSE}
+print(violin_plot_max)
+print(violin_plot_min)
+```
+As, the Average temperature is now explored let's check what the maximum and minimum temperature recorded looks like.In our quest to understand temperature variations, we dive into the intriguing world of violin plots. These visualizations paint a vivid picture of how temperatures fluctuate across different months, offering insights into seasonal patterns and trends.
+
+**Distribution of Maximum temperature by month with the help of violin plot**
+The violin plot showcasing maximum temperatures reveals a fascinating dance of heat across the months. As we navigate through each section, we observe changes in the width and shape of the plot, reflecting the distribution of temperatures. During the summer months, like July and August, the plot widens, indicating a greater spread of higher temperatures. Conversely, in the crisp embrace of winter, like September and October, the plot narrows, signaling cooler conditions. However, in November and December, the plot widens slightly, suggesting fluctuating temperatures from high to low. This interactive exploration reveals the dynamic interplay of temperature extremes year-round.
+
+**Distribution of Minimum temperature by month with the help of violin plot**
+Switching gears to minimum temperatures, the violin plot invites us on a journey through the ebb and flow of cold. As you interact with the plot, notice how the distribution of minimum temperatures evolves across the months. While the peaks and valleys are as dramatic as those in the maximum temperature plot, summer nights offer a welcome respite with narrower sections after the day's heat. Conversely, winter nights can plunge to frosty depths, reflected in broader sections of the plot. Through this interactive exploration, we gain a deeper appreciation for the nuances of temperature variation throughout the year.
+
+The fluctuations we've observed, from the widening summer heat to the narrowing winter chill, hint at the intricate dance of atmospheric forces. However, the slight deviations from expected trends in November and December raise intriguing questions about the underlying dynamics of temperature shifts. This weird weather pattern is a reminder of the unpredictability inherent in our planet's climate system.
+  These unpredictable weather patterns become even more significant when considered in light of global warming. It shows that how it is important for everyone to take efforts to lessen the effect of climate change and safeguard precious natural resources.
+
+
+```{r fig.align='center',fig.height=7,fig.width=11,warning=FALSE}
+# Load required libraries
+library(plotly)
+library(ggplot2)
+library(viridis)
+
+# Convert Date column to Date format if it's not already
+temp_data$Date <- as.Date(temp_data$Date)
+
+# Create an interactive time series plot with LOESS smoothing
+weather_temp_plot <- plot_ly(data = temp_data, x = ~Date) %>%
+  add_lines(y = ~TemperatureCAvg, name = "Average Temperature", line = list(color = 'green', width = 1)) %>%
+  add_lines(y = ~TemperatureCMax, name = "Max Temperature", line = list(color = 'red', width = 1)) %>%
+  add_lines(y = ~TemperatureCMin, name = "Min Temperature", line = list(color = 'blue', width = 1)) %>%
+  add_lines(y = ~fitted(loess(TemperatureCAvg ~ as.numeric(Date))), name = "LOESS Avg Temp", line = list(color = 'darkgreen', width = 2.5)) %>%
+  add_lines(y = ~fitted(loess(TemperatureCMax ~ as.numeric(Date))), name = "LOESS Max Temp", line = list(color = 'darkred', width = 2.5)) %>%
+  add_lines(y = ~fitted(loess(TemperatureCMin ~ as.numeric(Date))), name = "LOESS Min Temp", line = list(color = 'navy', width = 2.5)) %>%
+  layout(title = "Weather Temperature Over Time",
+         xaxis = list(title = "Date", showgrid = FALSE),
+         yaxis = list(title = "Temperature (°C)", showgrid = FALSE))
+
+
+weather_temp_plot
+```
+As we have seen the densities for all the maximum, minimum and average temperature, lects check the trend of those. The interactive time series plot displays the trends in average, maximum, and minimum temperatures over time. Each line represents the temperature values recorded on different dates.With each step forward, we witness the rise and fall of temperature, like a symphony of highs and lows orchestrated by the seasons themselves.
+
+  The incorporation of smoothed lines from LOESS (Locally Estimated Scatterplot Smoothing) enhances the clarity of the temperature patterns throughout time. These smoothed curves help in highlighting the long-term trends in temperature variance while removing short-term oscillations.
+
+  The plot allows us to identify seasonal variations in temperature. As we have already observe in the density plot of the temperature, it increase higher temperatures during the summer months and lower temperatures during the winter months. This seasonal pattern is reflected in both the average and extreme temperature measurements. This seasonal variability is evident in both the raw temperature data and the smoothed LOESS curves. The peak temperatures occur around mid-year, while the lowest temperatures are typically observed during the winter months.
+  
+  In addition to seasonal trends, the plot highlights daily fluctuations in temperature. These fluctuations are visible as smaller-scale oscillations within the broader seasonal patterns. The daily temperature variations can be influenced by factors such as diurnal cycles, weather fronts, and atmospheric conditions.
+  
+  By comparing the maximum and minimum temperature lines, we can assess the range of temperature variability throughout the time period. Sudden spikes or dips in these lines may indicate periods of extreme weather conditions, such as heatwaves or cold snaps. By examining the overall trajectory of the LOESS curves, we can identify any long-term trends or changes in temperature patterns over the observed period. Detecting such trends is crucial for understanding the potential impacts of climate change and informing adaptation strategies.
+  
+  The interactive nature of the plot allows users to zoom in on specific time periods and explore the data in more detail. This feature facilitates deeper analysis and enables users to uncover insights that may not be immediately apparent from the overall view of the plot.
+
+
+```{r fig.align='center',fig.height=7,fig.width=9,warning=FALSE}
+library(corrplot)
+
+# Define columns to include in the correlation matrix
+included_columns <- c("TemperatureCAvg","TemperatureCMax","TemperatureCMin","HrAvg", "TdAvgC", "WindkmhInt", "WindkmhGust","PresslevHp","Precmm","VisKm")
+
+# Remove columns with missing values
+subset_temp_data <- temp_data[, included_columns, drop = FALSE]  
+
+# Remove missing values
+for (i in 1:ncol(subset_temp_data)) {
+  col_mean <- mean(subset_temp_data[, i], na.rm = TRUE) 
+  subset_temp_data[is.na(subset_temp_data[, i]), i] <- col_mean
+}
+
+# Calculate correlation matrix
+correlation_matrix <- cor(subset_temp_data)
+
+# Use the RdYlBu color palette
+color_scheme <- colorRampPalette(c("#D73027", "#FC8D59", "#FEE090", "#FFFFBF", "#E0F3F8", "#91BFDB", "#4575B4"))
+
+# Visualize correlation matrix with corrplot
+corrplot(correlation_matrix, method = "color", col = color_scheme(100), 
+         type = "lower",
+         order = "hclust", 
+         addCoef.col = "black", 
+         tl.col = "black", 
+         tl.srt = 360, diag = FALSE, 
+         title = "Correlation Matrix of Variables", mar = c(0,0,2,0))
+```
+The colors in the correlation matrix tell us how strongly variables are connected. Dark blue means they're best buddies, while dark red signals they're a bit frenemies. The diagonal line is like a mirror reflecting each variable's perfect match with itself. It's a reminder that every variable knows itself best! Dark blue cells show us where variables like temperature measurements are in sync, holding hands tightly. On the other side, dark red cells reveal where one variable goes up while the other goes down, like a seesaw of sorts. Lighter blues and reds indicate moderate friendships or occasional clashes between variables. They're not as tight-knit as the dark shades, but they still have some interesting stories to share. The matrix is like a symmetrical art piece, with patterns on one side reflecting those on the other. It's a sign that relationships are fair and square, just like they should be. Some groups of variables show similar color patterns, hinting at hidden connections or shared influences. It's like finding cliques in a high school yearbook, but with data!
+
+By exploring the colors and patterns of the correlation matrix, we unlock a treasure trove of insights into how different variables interact. It's like reading a vibrant storybook where each color and pattern tells its own tale of connection and correlation.
+
+So far we have been exploring environmental factors about Colchester, let's have a look at geography of Colchester.
+
+```{r fig.align='center',fig.height=7,fig.width=9,warning=FALSE}
+library(crosstalk)
+library(leaflet.extras)
+
+# Checkboxes for crime category
+crime_category_cb<-SharedData$new(final_data)
+
+center_lat <- 51.88705  
+center_long <- 0.90205
+
+# Define color palette for each crime category
+color_palette <- c(
+  "Public Order Crime" = "blue",
+  "Theft" = "darkgreen",
+  "Property Crime" = "orange",
+  "Violent Crime" = "red",
+  "Drug-Related Crime" = "purple",
+  "Other Crime" = "brown" 
+)
+
+color_palette<-colorFactor(c("blue","darkgreen","orange","red","purple","brown"),domain = c("Public Order Crime","Theft","Property Crime","Violent Crime","Drug-Related Crime","Other Crime"))
+
+# Create Leaflet map
+crime_map <- crime_category_cb %>% leaflet() %>%
+  addTiles() %>%
+  setView(lng = center_long, lat = center_lat, zoom = 15) %>%
+  addCircleMarkers(
+    ~long, ~lat,
+    fillColor = ~color_palette(incident_category),
+    radius = 5,
+    fillOpacity = 0.8,
+    popup = ~paste0( 
+      "<h5>Crime Incident</h5>",
+      "<ul style='list-style-type: disc; padding-left: 20px;'>",
+      "<li>Category: ", incident_category, "</li>",
+      "<li>Street Name: ", street_name, "</li>",
+      "</ul>"
+      ),
+    stroke = FALSE
+  )
+```
+```{r echo=FALSE,fig.align='center',fig.height=7,fig.width=9,warning=FALSE}
+bscols(
+  filter_checkbox(
+    id="incident_category",
+    label = "Crime Categories",
+    sharedData = crime_category_cb,
+    group = ~incident_category
+  )
+)
+
+# Display the map
+crime_map
+```
+A Map view sponsored by OpenStreetMap is shown focussing Colchester region and marking all the different crime incidents happened throughout the year with special colours.
+
+There are neat catagory selection options given along with the map by which we can see individual categories of crimes highlighted on the map. We can visualise that crime rates overall are much densely distributed over the region.
+
+Uncategorised or the “other” crimes are comparatively less dense than the others, while Violent crimes are having a high density as also seen in the Dot plot. One common thing to notice is that the central Colchester area is mostly affected by any given crime as we can see a dense cluster of markings over central region as compared to outskirts.
+
+We can hover over the markers to see what they denote and also hover over the map for some more insights. This map is a good way to visualise the most affected areas around Colchester and to see the likelihood of being safe in any given region around.
+```{r fig.align='center',fig.height=15,fig.width=11,warning=FALSE,echo=FALSE}
+library(DT)
+
+# Create interactive datatable
+datatable(crime_data,
+          filter = "top",  # allows filtering on each column
+          extensions = c("Buttons", "Scroller"),  # add download buttons, etc
+          rownames = FALSE,  # remove rownames
+          style = "bootstrap",
+          class = "compact",
+          width = "100%",
+          options = list(
+            dom = "Blrtip",  # specify content (search box, etc)
+            deferRender = TRUE,
+            scrollY = 300,
+            scroller = TRUE,
+            columnDefs = list(
+              list(
+                visible = FALSE,
+                targets = c(0:5,7,8,9,10,12)  # hide some columns if needed
+              )
+            ), 
+            buttons = list(
+              "csv",  # download as .csv
+              "excel"  # download as .xlsx
+            )
+          ),
+          colnames = c(
+            "Crime Category"="incident_category",
+            "Street Name"="street_name",
+            "Month"="month_name",
+            "Crime Category"="category",
+            "Crime Status"="outcome_status",
+            "Persistent ID"="persistent_id",
+            "Date"="date",
+            "Latitude"="lat",
+            "Longitude"="long",
+            "Street ID"="street_id",
+            "Context"="context",
+            "ID"="id",
+            "Location Type"="location_type",
+            "Location Subtype"="location_subtype",
+            "Monthly"="monthly"
+          )
+)
+```
+
+From this table, we can search particular crime categories and also filter them. There are 2 buttons present through which we can download the CSV or Excel file at our convenience. 
+
+# Conclusion
+
+Our exploration into Colchester's crime and weather patterns has uncovered some interesting findings. By looking at the graphs and charts, we've learned about when crime tends to happen more, how weather might affect it, and where it's most common.
+
+Through the report, it is quite evident that the violent crime is frequently occurring crime and also the weather is changing dramatically. Moreover, we've observed seasonal trends in crime incidents, identified potential correlations between weather phenomena and criminal activity, and uncovered hidden patterns within the data. Our findings highlight the dynamic interplay between environmental factors and public safety dynamics, shedding light on how these variables influence one another within the community.
+
+As we conclude, let's harness these insights to drive positive change and have a more safe Colchester, while always being vigilant.
+
+
+
+
+
+
